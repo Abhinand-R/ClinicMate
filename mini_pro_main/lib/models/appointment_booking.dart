@@ -26,6 +26,35 @@ class _DoctorCardState extends State<DoctorCard> {
     _fetchDoctorInfo();
   }
 
+  Future<bool> _hasScheduleForSelectedDay(DateTime selectedDate) async {
+    try {
+      // Get the doctor's document ID from the 'doctors' collection
+      final doctorSnapshot = await FirebaseFirestore.instance
+          .collection('doctors')
+          .where('name', isEqualTo: widget.doctor.name)
+          .get();
+
+      if (doctorSnapshot.docs.isNotEmpty) {
+        final doctorId = doctorSnapshot.docs.first.id;
+
+        // Query the 'schedules' subcollection for the given doctorId and selectedDate
+        final scheduleSnapshot = await FirebaseFirestore.instance
+            .collection('doctors')
+            .doc(doctorId)
+            .collection('schedules')
+            .where('date', isEqualTo: Timestamp.fromDate(selectedDate))
+            .get();
+
+        return scheduleSnapshot.docs.isNotEmpty;
+      }
+    } catch (e) {
+      // Handle any exceptions
+      print('Error fetching doctor schedule: $e');
+    }
+
+    return false;
+  }
+
   Future<void> _fetchDoctorInfo() async {
     try {
       final snapshot = await FirebaseFirestore.instance
@@ -136,15 +165,36 @@ class _DoctorCardState extends State<DoctorCard> {
                   ),
                   SizedBox(height: 16.0),
                   ElevatedButton(
-                    onPressed: () {
+                    onPressed: () async {
                       if (_selectedDay != null) {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (context) =>
-                                TimeSlotPage(selectedDate: _selectedDay!),
-                          ),
-                        );
+                        final hasSchedule =
+                            await _hasScheduleForSelectedDay(_selectedDay!);
+                        if (hasSchedule) {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => TimeSlotPage(
+                                selectedDate: _selectedDay!,
+                                doctor: widget.doctor,
+                              ),
+                            ),
+                          );
+                        } else {
+                          showDialog(
+                            context: context,
+                            builder: (context) => AlertDialog(
+                              title: Text('Doctor Not Available'),
+                              content: Text(
+                                  'The doctor is not available on the selected date.'),
+                              actions: [
+                                TextButton(
+                                  onPressed: () => Navigator.pop(context),
+                                  child: Text('OK'),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
                       }
                     },
                     child: const Text('Book Appointment'),

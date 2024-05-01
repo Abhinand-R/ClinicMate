@@ -1,10 +1,16 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:mini_pro_main/models/doctors.dart';
 
 class TimeSlotPage extends StatefulWidget {
-  final DateTime selectedDate; // Add this line
+  final DateTime selectedDate;
+  final Doctor doctor; // Add this line
 
-  const TimeSlotPage({Key? key, required this.selectedDate})
-      : super(key: key); // Add this line
+  const TimeSlotPage({
+    Key? key,
+    required this.selectedDate,
+    required this.doctor,
+  }) : super(key: key); // Add this line
 
   @override
   _TimeSlotPageState createState() => _TimeSlotPageState();
@@ -13,6 +19,58 @@ class TimeSlotPage extends StatefulWidget {
 }
 
 class _TimeSlotPageState extends State<TimeSlotPage> {
+  List<String> _timeSlots = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchTimeSlots();
+  }
+
+  Future<void> _fetchTimeSlots() async {
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('doctors')
+          .where('name', isEqualTo: widget.doctor.name)
+          .get();
+
+      if (snapshot.docs.isNotEmpty) {
+        final doctorDoc = snapshot.docs.first;
+        final scheduleSnapshot = await FirebaseFirestore.instance
+            .collection('doctors')
+            .doc(doctorDoc.id)
+            .collection('schedules')
+            .get();
+
+        if (scheduleSnapshot.docs.isNotEmpty) {
+          final scheduleDoc = scheduleSnapshot.docs.first;
+          final timeSlotsSnapshot = await FirebaseFirestore.instance
+              .collection('doctors')
+              .doc(doctorDoc.id)
+              .collection('schedules')
+              .doc(scheduleDoc.id)
+              //.collection('timeslots')
+              //.where()
+              .get();
+
+          if (timeSlotsSnapshot.exists) {
+            final timeSlotsData = timeSlotsSnapshot.data()?['timeslots'];
+
+            if (timeSlotsData != null && timeSlotsData is List) {
+              final fetchedTimeSlots = timeSlotsData.cast<String>();
+              setState(() {
+                _timeSlots = fetchedTimeSlots;
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Handle any exceptions
+      print('Error fetching time slots: $e');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -42,17 +100,15 @@ class _TimeSlotPageState extends State<TimeSlotPage> {
                     ),
                   ),
                   SizedBox(height: 20),
-                  Column(
-                    children: [
-                      TimeSlotButton('08:00', this),
-                      TimeSlotButton('10:00', this),
-                      TimeSlotButton('12:00', this),
-                      TimeSlotButton('14:00', this),
-                      TimeSlotButton('16:00', this),
-                      TimeSlotButton('18:00', this),
-                      TimeSlotButton('20:00', this),
-                    ],
-                  ),
+                  _timeSlots.isEmpty
+                      ? Text('No available time slots')
+                      : Column(
+                          children: _timeSlots
+                              .map(
+                                (timeSlot) => TimeSlotButton(timeSlot, this),
+                              )
+                              .toList(),
+                        ),
                 ],
               ),
             ),
