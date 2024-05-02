@@ -1,30 +1,43 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:mini_pro_main/models/doctors.dart';
 
 class TimeSlotPage extends StatefulWidget {
   final DateTime selectedDate;
-  final Doctor doctor; // Add this line
+  final Doctor doctor;
 
   const TimeSlotPage({
     Key? key,
     required this.selectedDate,
     required this.doctor,
-  }) : super(key: key); // Add this line
+  }) : super(key: key);
 
   @override
   _TimeSlotPageState createState() => _TimeSlotPageState();
-
-  static of(BuildContext context) {}
 }
 
 class _TimeSlotPageState extends State<TimeSlotPage> {
-  List<String> _timeSlots = [];
+  List<String> _availableTimeSlots = [];
+  List<String> _bookedTimeSlots = [];
+  late String userId;
+  late String userName;
 
   @override
   void initState() {
     super.initState();
     _fetchTimeSlots();
+    _getUserInfo();
+  }
+
+  Future<void> _getUserInfo() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      setState(() {
+        userId = user.uid;
+        userName = user.displayName ?? '';
+      });
+    }
   }
 
   Future<void> _fetchTimeSlots() async {
@@ -49,8 +62,6 @@ class _TimeSlotPageState extends State<TimeSlotPage> {
               .doc(doctorDoc.id)
               .collection('schedules')
               .doc(scheduleDoc.id)
-              //.collection('timeslots')
-              //.where()
               .get();
 
           if (timeSlotsSnapshot.exists) {
@@ -58,15 +69,26 @@ class _TimeSlotPageState extends State<TimeSlotPage> {
 
             if (timeSlotsData != null && timeSlotsData is List) {
               final fetchedTimeSlots = timeSlotsData.cast<String>();
+
+              // Fetch booked time slots
+              final bookedSlotsSnapshot = await timeSlotsSnapshot.reference
+                  .collection('bookedSlots')
+                  .get();
+              final bookedTimeSlots = bookedSlotsSnapshot.docs
+                  .map((doc) => doc.data()['timeSlot'] as String)
+                  .toList();
+
               setState(() {
-                _timeSlots = fetchedTimeSlots;
+                _availableTimeSlots = fetchedTimeSlots
+                    .where((timeSlot) => !bookedTimeSlots.contains(timeSlot))
+                    .toList();
+                _bookedTimeSlots = bookedTimeSlots;
               });
             }
           }
         }
       }
     } catch (e) {
-      // Handle any exceptions
       print('Error fetching time slots: $e');
     }
   }
@@ -94,21 +116,40 @@ class _TimeSlotPageState extends State<TimeSlotPage> {
                   ),
                   SizedBox(height: 20),
                   Text(
-                    '${widget.selectedDate.day} ${_getMonth(widget.selectedDate.month)} ${widget.selectedDate.year}', // Use selectedDate from widget
+                    '${widget.selectedDate.day} ${_getMonth(widget.selectedDate.month)} ${widget.selectedDate.year}',
                     style: TextStyle(
                       fontSize: 20,
                     ),
                   ),
                   SizedBox(height: 20),
-                  _timeSlots.isEmpty
-                      ? Text('No available time slots')
-                      : Column(
-                          children: _timeSlots
-                              .map(
-                                (timeSlot) => TimeSlotButton(timeSlot, this),
-                              )
-                              .toList(),
-                        ),
+                  Column(
+                    children: [
+                      // Display available time slots as clickable buttons
+                      ..._availableTimeSlots.map((timeSlot) {
+                        return TimeSlotButton(timeSlot, this);
+                      }).toList(),
+                      // Display booked time slots as disabled (red) buttons
+                      ..._bookedTimeSlots.map((bookedTimeSlot) {
+                        return Container(
+                          margin: EdgeInsets.symmetric(vertical: 5),
+                          padding: EdgeInsets.symmetric(
+                              horizontal: 20, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: Colors.red,
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            bookedTimeSlot,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.white,
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ],
+                  ),
                 ],
               ),
             ),
@@ -118,12 +159,13 @@ class _TimeSlotPageState extends State<TimeSlotPage> {
             child: ElevatedButton(
               onPressed: () {
                 if (_selectedTimeSlot != null) {
+                  bookAppointment(_selectedTimeSlot!);
                   Navigator.push(
                     context,
                     MaterialPageRoute(
                       builder: (context) => AppointmentConfirmationPage(
-                        date:
-                            '${widget.selectedDate.day}/${widget.selectedDate.month}/${widget.selectedDate.year}',
+                        dateTimestamp: Timestamp.fromDate(
+                            widget.selectedDate), // Pass the Timestamp object
                         timeSlot: _selectedTimeSlot!,
                       ),
                     ),
@@ -178,6 +220,54 @@ class _TimeSlotPageState extends State<TimeSlotPage> {
         return '';
     }
   }
+
+  Future<void> bookAppointment(String timeSlot) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) {
+        // Handle the case when the user is not authenticated
+        print('User is not authenticated');
+        return;
+      }
+
+      final userId = user.uid;
+      final userName = user.displayName ?? '';
+
+      final snapshot = await FirebaseFirestore.instance
+          .collection('doctors')
+          .where('name', isEqualTo: widget.doctor.name)
+          .get();
+
+      if (snapshot.docs.isNotEmpty) {
+        final doctorDoc = snapshot.docs.first;
+        final scheduleSnapshot = await FirebaseFirestore.instance
+            .collection('doctors')
+            .doc(doctorDoc.id)
+            .collection('schedules')
+            .get();
+
+        if (scheduleSnapshot.docs.isNotEmpty) {
+          final scheduleDoc = scheduleSnapshot.docs.first;
+          final scheduleDocRef = await FirebaseFirestore.instance
+              .collection('doctors')
+              .doc(doctorDoc.id)
+              .collection('schedules')
+              .doc(scheduleDoc.id)
+              .get();
+
+          await scheduleDocRef.reference.collection('bookedSlots').add({
+            'timeSlot': timeSlot,
+            'bookedAt': FieldValue.serverTimestamp(),
+            'userId': userId, // Store the user ID
+            'userName': userName, // Store the user name
+            'date': widget.selectedDate, // Store the selected date
+          });
+        }
+      }
+    } catch (e) {
+      print('Error booking appointment: $e');
+    }
+  }
 }
 
 class TimeSlotButton extends StatelessWidget {
@@ -189,7 +279,6 @@ class TimeSlotButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isSelected = state._selectedTimeSlot == time;
-
     return Container(
       margin: EdgeInsets.symmetric(vertical: 5),
       child: ElevatedButton(
@@ -242,17 +331,19 @@ class AppointmentTime extends StatelessWidget {
 }
 
 class AppointmentConfirmationPage extends StatelessWidget {
-  final String date;
+  final Timestamp dateTimestamp; // Change the type to Timestamp
   final String timeSlot;
 
   const AppointmentConfirmationPage({
     Key? key,
-    required this.date,
+    required this.dateTimestamp, // Pass the Timestamp object
     required this.timeSlot,
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
+    final date = dateTimestamp.toDate(); // Convert Timestamp to DateTime
+
     return Scaffold(
       appBar: AppBar(
         title: Text('Appointment Confirmation'),
@@ -276,7 +367,7 @@ class AppointmentConfirmationPage extends StatelessWidget {
                 ),
               ),
               Text(
-                'on $date at $timeSlot',
+                'on ${date.day}/${date.month}/${date.year} at $timeSlot',
                 style: TextStyle(
                   color: Colors.white,
                   fontSize: 16,
